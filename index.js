@@ -244,7 +244,7 @@ run();
 
 // Default route
 app.get('/', (req, res) => {
-    res.send('Food Zone Server Running for Assignment 12');
+    res.send('Food Zone Server Running properly');
 });
 
 // Start server
