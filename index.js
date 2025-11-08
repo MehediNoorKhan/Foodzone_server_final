@@ -191,6 +191,7 @@ async function run() {
             }
         });
 
+
         app.get("/myfoodrequest", verifyFBToken, async (req, res) => {
             try {
                 const userEmail = req.query.email;
@@ -243,7 +244,7 @@ run();
 
 // Default route
 app.get('/', (req, res) => {
-    res.send('Blood Donation Server Running for Assignment 12');
+    res.send('Food Zone Server Running for Assignment 12');
 });
 
 // Start server
