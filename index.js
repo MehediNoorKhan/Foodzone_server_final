@@ -3,7 +3,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+// import rateLimit from "express-rate-limit";
 import { MongoClient, ServerApiVersion, ObjectId } from "mongodb";
 import admin from "firebase-admin";
 import Stripe from "stripe";
@@ -38,12 +38,12 @@ app.use(helmet());
 app.use(express.json({ limit: "10mb" }));
 
 // Rate limiter
-app.use(rateLimit({
-    windowMs: 60 * 1000,
-    max: 120,
-    standardHeaders: true,
-    legacyHeaders: false,
-}));
+// app.use(rateLimit({
+//     windowMs: 60 * 1000,
+//     max: 120,
+//     standardHeaders: true,
+//     legacyHeaders: false,
+// }));
 
 // CORS
 const allowedOrigins = [
@@ -57,7 +57,7 @@ const client = new MongoClient(MONGODB_URI, { serverApi: { version: ServerApiVer
 let db, usersCollection, foodCollection, foodRequestCollection, paymentCollection;
 
 async function connectDB() {
-    await client.connect();
+    // await client.connect();
     db = client.db("foodshare");
 
     usersCollection = db.collection("users");
@@ -68,8 +68,8 @@ async function connectDB() {
     console.log("MongoDB connected");
 }
 await connectDB().catch(err => {
-    console.error("MongoDB connection failed:", err);
-    process.exit(1);
+    // console.error("MongoDB connection failed:", err);
+    // process.exit(1);
 });
 
 // ---------- Firebase Token Verification ----------
