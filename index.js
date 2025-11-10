@@ -4,17 +4,20 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const admin = require("firebase-admin");
 const { messaging } = require('firebase-admin');
-// const fs = require('fs');
+
 
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 // Middleware
-app.use(cors({
-    origin: ['http://localhost:5173'], // Vite default
-    credentials: true,
-}));
+const corsOptions = {
+    origin: "http://localhost:5173", // frontend URL
+    credentials: true,               // allow credentials (cookies, headers)
+};
+
+app.use(cors(corsOptions));
+
 app.use(express.json());
 
 const serviceAccount = require("./assignment11firebasesdk.json");
@@ -66,172 +69,289 @@ async function run() {
         };
 
         // Create or update user
+        // --- Users ---
         app.post("/users", async (req, res) => {
-            try {
-                const { email, name, photourl, membership = "no" } = req.body;
-                if (!email) return res.status(400).json({ error: "Email is required" });
+            const usersCollection = db.collection("users");
+            const { email, name, photourl, membership = "no", post = 0 } = req.body;
 
-                const result = await usersCollection.updateOne(
-                    { email },
-                    { $setOnInsert: { email, membership }, $set: { name, photourl } },
-                    { upsert: true }
-                );
-                res.json({ result });
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+            const result = await usersCollection.updateOne(
+                { email },
+                {
+                    $setOnInsert: { email, membership, post, createdAt: new Date() }, // add post here
+                    $set: { name, photourl, updatedAt: new Date() }
+                },
+                { upsert: true }
+            );
+
+            res.json({ success: true, upserted: result.upsertedCount > 0 });
         });
 
-        // Get all users
+
         app.get("/users", async (req, res) => {
-            try {
-                const users = await usersCollection.find().toArray();
-                res.json(users);
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+
+            const users = await db.collection("users").find().toArray();
+            res.json(users);
         });
 
-        // Get user by email
         app.get("/users/:email", async (req, res) => {
-            try {
-                const email = req.params.email;
-                const user = await usersCollection.findOne({ email });
-                if (!user) return res.status(404).json({ error: "User not found" });
-                res.json(user);
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+
+            const usersCollection = db.collection("users");
+            const user = await usersCollection.findOne({ email: req.params.email });
+            user ? res.json(user) : res.status(404).json({ error: "User not found" });
         });
 
-        // Update membership
         app.patch("/users/membership/:email", async (req, res) => {
-            try {
-                const email = req.params.email;
-                const result = await usersCollection.updateOne({ email }, { $set: { membership: "yes" } });
-                res.json(result);
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+
+            const usersCollection = db.collection("users");
+            const result = await usersCollection.updateOne(
+                { email: req.params.email },
+                { $set: { membership: "yes", membershipUpdatedAt: new Date() } }
+            );
+            result.matchedCount === 0 ? res.status(404).json({ error: "User not found" }) : res.json({ success: true });
         });
 
         // --- Food ---
         app.post("/food", async (req, res) => {
             try {
-                const { donorEmail, foodName } = req.body;
-                if (!donorEmail || !foodName) return res.status(400).json({ error: "donorEmail and foodName required" });
+                const foodCollection = db.collection("food");
+                const usersCollection = db.collection("users");
 
-                const data = { ...req.body, createdAt: new Date() };
-                const result = await foodCollection.insertOne(data);
-                res.status(201).json({ insertedId: result.insertedId });
-            } catch (err) {
-                res.status(500).json({ error: err.message });
+                // Insert the food object as sent from frontend
+                const result = await foodCollection.insertOne({
+                    ...req.body,
+                    createdAt: new Date(), // just metadata, no redundancy
+                });
+
+                // Increment the user's post count
+                if (req.body.donorEmail) {
+                    await usersCollection.updateOne(
+                        { email: req.body.donorEmail },
+                        { $inc: { post: 1 } }
+                    );
+                }
+
+                res.status(201).json({
+                    success: true,
+                    insertedId: result.insertedId
+                });
+
+            } catch (error) {
+                console.error("Error inserting food:", error);
+                res.status(500).json({ success: false, message: "Failed to add food" });
             }
         });
 
+
         app.get("/food", async (req, res) => {
-            try {
-                const search = req.query.search || "";
-                const sortOrder = req.query.sortOrder === "asc" ? 1 : -1;
 
-                const filter = {
-                    foodStatus: "available",
-                    expiredDateTime: { $gt: new Date() },
-                    foodName: { $regex: search, $options: "i" },
-                };
+            const foods = await db.collection("food").find().toArray();
 
-                const foods = await foodCollection.find(filter).sort({ expiredDateTime: sortOrder }).toArray();
-                res.json(foods);
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+            res.json(foods);
         });
 
         app.get("/food/:id", async (req, res) => {
-            try {
-                const food = await foodCollection.findOne({ _id: new ObjectId(req.params.id) });
-                if (!food) return res.status(404).json({ error: "Food not found" });
-                res.json(food);
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+
+            const foodCollection = db.collection("food");
+
+            if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
+            const food = await foodCollection.findOne({ _id: new ObjectId(req.params.id) });
+            food ? res.json(food) : res.status(404).json({ error: "Food not found" });
         });
 
         app.put("/food/:id", async (req, res) => {
+
+            const foodCollection = db.collection("food");
+            const { _id, ...updateData } = req.body;
+            updateData.updatedAt = new Date();
+            const result = await foodCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: updateData });
+            res.json({ success: true, result });
+        });
+
+        // DELETE a specific food by ID
+        app.delete("/food/:id", verifyFBToken, async (req, res) => {
             try {
-                const result = await foodCollection.updateOne({ _id: new ObjectId(req.params.id) }, { $set: req.body });
-                if (result.matchedCount === 0) return res.status(404).json({ error: "Food not found" });
-                res.json({ message: "Food updated", result });
-            } catch (err) {
-                res.status(500).json({ error: err.message });
+                const { id } = req.params;
+
+                if (!ObjectId.isValid(id)) {
+                    return res.status(400).json({ error: "Invalid food ID" });
+                }
+
+                // Optionally, check if the food belongs to the logged-in user
+                const food = await foodCollection.findOne({ _id: new ObjectId(id) });
+                if (!food) {
+                    return res.status(404).json({ error: "Food not found" });
+                }
+
+                // If you want to allow only the donor to delete their food
+                if (food.donorEmail !== req.decoded.email) {
+                    return res.status(403).json({ error: "You are not allowed to delete this food" });
+                }
+
+                const result = await foodCollection.deleteOne({ _id: new ObjectId(id) });
+
+                if (result.deletedCount === 0) {
+                    return res.status(500).json({ error: "Failed to delete food" });
+                }
+
+                res.json({ success: true, message: "Food deleted successfully" });
+            } catch (error) {
+                console.error("Error deleting food:", error);
+                res.status(500).json({ error: "Server Error" });
             }
         });
 
-        app.patch("/food/:id", async (req, res) => {
+
+        app.get("/available-foods", async (req, res) => {
             try {
-                const { foodStatus } = req.body;
-                const result = await foodCollection.updateOne(
-                    { _id: new ObjectId(req.params.id) },
-                    { $set: { foodStatus: foodStatus || "requested" } }
-                );
-                res.json(result);
+                const { search } = req.query; // optional search query
+                const foodCollection = db.collection("food");
+
+                // Build the query
+                const query = { foodStatus: "available" };
+
+                // Add search filter if provided
+                if (search) {
+                    query.foodName = { $regex: search, $options: "i" }; // case-insensitive search
+                }
+
+                // Fetch foods from DB
+                const foods = await foodCollection.find(query).toArray();
+
+                res.json(foods);
             } catch (err) {
-                res.status(500).json({ error: err.message });
+                console.error("Error fetching available foods:", err);
+                res.status(500).json({ message: "Server Error" });
+            }
+        });
+
+        // GET foods donated by a specific logged-in user
+        app.get("/food/user/:email", verifyFBToken, async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                if (!email) {
+                    return res.status(400).json({ message: "Email is required" });
+                }
+
+                const foods = await foodCollection
+                    .find({ donorEmail: email })
+                    .sort({ createdAt: -1 })
+                    .toArray();
+
+                res.json(foods);
+            } catch (error) {
+                console.error("Error fetching user's foods:", error);
+                res.status(500).json({ message: "Server Error" });
             }
         });
 
         // --- Food Requests ---
-        app.post("/requestedfoods", async (req, res) => {
+        // POST /api/request-food
+        app.post("/requestfoods", async (req, res) => {
             try {
-                const data = { ...req.body, requestedAt: new Date() };
-                const result = await foodRequestCollection.insertOne(data);
-                res.status(201).json({ insertedId: result.insertedId });
-            } catch (err) {
-                res.status(500).json({ error: err.message });
+                const { foodId, userEmail, requestedQuantity, additionalNotes } = req.body;
+
+                const foodRequestCollection = db.collection("requestedfoods");
+
+                // Check if a request already exists for the same user and food
+                const existingRequest = await foodRequestCollection.findOne({
+                    foodId,
+                    userEmail
+                });
+
+                if (existingRequest) {
+                    // Update the requestedQuantity and optionally update notes
+                    const updatedQuantity = existingRequest.requestedQuantity + requestedQuantity;
+                    await foodRequestCollection.updateOne(
+                        { _id: existingRequest._id },
+                        { $set: { requestedQuantity: updatedQuantity, additionalNotes } }
+                    );
+
+                    return res.json({
+                        success: true,
+                        message: "Request updated successfully",
+                        updatedQuantity
+                    });
+                }
+
+                // Otherwise, create a new request
+                const result = await foodRequestCollection.insertOne({
+                    foodId,
+                    userEmail,
+                    requestedQuantity,
+                    additionalNotes,
+                    status: "pending",
+                    requestedAt: new Date(),
+                });
+
+                res.json({
+                    success: true,
+                    message: "Request submitted successfully",
+                    insertedId: result.insertedId
+                });
+            } catch (error) {
+                console.error("Request error:", error);
+                res.status(500).json({
+                    success: false,
+                    message: "Something went wrong. Please try again later."
+                });
             }
         });
+
 
 
         app.get("/myfoodrequest", verifyFBToken, async (req, res) => {
+
+            const foodRequestCollection = db.collection("requestedfoods");
+            const requests = await foodRequestCollection.find({ userEmail: req.decoded.email }).sort({ requestedAt: -1 }).toArray();
+            res.json(requests);
+        });
+
+        app.delete("/myfoodrequest/:id", async (req, res) => {
+            const requestId = req.params.id;
+
             try {
-                const userEmail = req.query.email;
-                if (userEmail !== req.decoded.email) return res.status(403).json({ error: "Forbidden" });
-                const requests = await foodRequestCollection.find({ userEmail }).toArray();
-                res.json(requests);
+                // 1. Find the requested food
+                const requestedFood = await foodRequestCollection.findOne({ _id: new ObjectId(requestId) });
+                if (!requestedFood) return res.status(404).json({ message: "Requested food not found" });
+
+                const { foodId, userEmail } = requestedFood;
+
+                // 2. Delete from requestedfoods
+                await foodRequestCollection.deleteOne({ _id: new ObjectId(requestId) });
+
+                // 3. Increment food quantity in foods collection
+                await foodCollection.updateOne(
+                    { _id: new ObjectId(foodId) },
+                    { $inc: { foodQuantity: 1 } }
+                );
+
+                // 4. Decrement user's foodRequest count
+                await usersCollection.updateOne(
+                    { email: userEmail },
+                    { $inc: { foodRequest: -1 } }
+                );
+
+                res.status(200).json({ message: "Food request canceled successfully" });
             } catch (err) {
-                res.status(500).json({ error: err.message });
+                console.error("Error in DELETE /myfoodrequest/:id:", err);
+                res.status(500).json({ message: "Server error" });
             }
         });
+
 
         // --- Payments ---
         app.post("/create-payment-intent", async (req, res) => {
-            try {
-                const { price } = req.body;
-                if (!price || price <= 0) return res.status(400).json({ error: "Invalid price" });
-
-                const paymentIntent = await stripe.paymentIntents.create({
-                    amount: Math.round(price * 100),
-                    currency: "usd",
-                    automatic_payment_methods: { enabled: true },
-                });
-
-                res.json({ clientSecret: paymentIntent.client_secret });
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+            const { price } = req.body;
+            const paymentIntent = await stripe.paymentIntents.create({ amount: Math.round(price * 100), currency: "usd", automatic_payment_methods: { enabled: true } });
+            res.json({ clientSecret: paymentIntent.client_secret });
         });
 
         app.post("/payments", async (req, res) => {
-            try {
-                const { email, amount, transactionId, status, date } = req.body;
-                if (!email || !amount || !transactionId || !status) return res.status(400).json({ error: "Missing payment data" });
 
-                const data = { email, amount, transactionId, status, date: date || new Date() };
-                const result = await paymentCollection.insertOne(data);
-                res.status(201).json({ insertedId: result.insertedId });
-            } catch (err) {
-                res.status(500).json({ error: err.message });
-            }
+            const paymentCollection = db.collection("payments");
+            const result = await paymentCollection.insertOne({ ...req.body, createdAt: new Date() });
+            res.json({ success: true, insertedId: result.insertedId });
         });
 
     } catch (error) {
