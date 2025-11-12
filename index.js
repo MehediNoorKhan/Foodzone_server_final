@@ -4,6 +4,8 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const admin = require("firebase-admin");
 const { messaging } = require('firebase-admin');
+const Stripe = require("stripe");
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 
 
@@ -12,8 +14,11 @@ const port = process.env.PORT || 3000;
 
 // Middleware
 const corsOptions = {
-    origin: "http://localhost:5173", // frontend URL
-    credentials: true,               // allow credentials (cookies, headers)
+    origin: [
+        "http://localhost:5173",
+        "https://assignment11-b015f.web.app"
+    ],
+    credentials: true, // allow cookies and auth headers
 };
 
 app.use(cors(corsOptions));
@@ -29,7 +34,6 @@ admin.initializeApp({
 // MongoDB setup
 const uri = process.env.MONGODB_URI;
 const client = new MongoClient(uri);
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 let usersCollection, foodCollection, foodRequestCollection, paymentCollection;
 
 // Connect to MongoDB
@@ -100,15 +104,15 @@ async function run() {
             user ? res.json(user) : res.status(404).json({ error: "User not found" });
         });
 
-        app.patch("/users/membership/:email", async (req, res) => {
+        // app.patch("/users/membership/:email", async (req, res) => {
 
-            const usersCollection = db.collection("users");
-            const result = await usersCollection.updateOne(
-                { email: req.params.email },
-                { $set: { membership: "yes", membershipUpdatedAt: new Date() } }
-            );
-            result.matchedCount === 0 ? res.status(404).json({ error: "User not found" }) : res.json({ success: true });
-        });
+        //     const usersCollection = db.collection("users");
+        //     const result = await usersCollection.updateOne(
+        //         { email: req.params.email },
+        //         { $set: { membership: "yes", membershipUpdatedAt: new Date() } }
+        //     );
+        //     result.matchedCount === 0 ? res.status(404).json({ error: "User not found" }) : res.json({ success: true });
+        // });
 
         // --- Food ---
         app.post("/food", async (req, res) => {
@@ -341,18 +345,88 @@ async function run() {
 
 
         // --- Payments ---
+        // app.post("/create-payment-intent", async (req, res) => {
+        //     const { price } = req.body;
+        //     const paymentIntent = await stripe.paymentIntents.create({ amount: Math.round(price * 100), currency: "usd", automatic_payment_methods: { enabled: true } });
+        //     res.json({ clientSecret: paymentIntent.client_secret });
+        // });
+
         app.post("/create-payment-intent", async (req, res) => {
-            const { price } = req.body;
-            const paymentIntent = await stripe.paymentIntents.create({ amount: Math.round(price * 100), currency: "usd", automatic_payment_methods: { enabled: true } });
-            res.json({ clientSecret: paymentIntent.client_secret });
+            try {
+                const { price } = req.body;
+                if (!price) return res.status(400).json({ error: "Price is required" });
+
+                const amount = Math.round(price * 100);
+
+                const paymentIntent = await stripe.paymentIntents.create({
+                    amount,
+                    currency: "usd",
+                    automatic_payment_methods: { enabled: true },
+                });
+
+                res.json({ clientSecret: paymentIntent.client_secret });
+            } catch (error) {
+                console.error("❌ Stripe payment intent error:", error.message);
+                res.status(500).json({ error: error.message });
+            }
         });
+
+        // app.post("/payments", async (req, res) => {
+
+        //     const paymentCollection = db.collection("payments");
+        //     const result = await paymentCollection.insertOne({ ...req.body, createdAt: new Date() });
+        //     res.json({ success: true, insertedId: result.insertedId });
+        // });
 
         app.post("/payments", async (req, res) => {
+            try {
+                const paymentCollection = db.collection("payments");
+                const { email, amount, transactionId, status } = req.body;
 
-            const paymentCollection = db.collection("payments");
-            const result = await paymentCollection.insertOne({ ...req.body, createdAt: new Date() });
-            res.json({ success: true, insertedId: result.insertedId });
+                if (!email || !amount || !transactionId || !status) {
+                    return res.status(400).json({ error: "Missing payment details" });
+                }
+
+                const paymentDoc = {
+                    email,
+                    amount,
+                    transactionId,
+                    status,
+                    date: new Date(),
+                };
+
+                const result = await paymentCollection.insertOne(paymentDoc);
+                res.json({ success: true, insertedId: result.insertedId });
+            } catch (error) {
+                console.error("❌ Payment save error:", error.message);
+                res.status(500).json({ error: error.message });
+            }
         });
+
+
+        app.patch("/users/membership/:email", async (req, res) => {
+            try {
+                const usersCollection = db.collection("users");
+                const result = await usersCollection.updateOne(
+                    { email: req.params.email },
+                    {
+                        $set: {
+                            membership: "yes",
+                            membershipUpdatedAt: new Date(),
+                        },
+                    }
+                );
+
+                if (result.matchedCount === 0)
+                    return res.status(404).json({ error: "User not found" });
+
+                res.json({ success: true });
+            } catch (error) {
+                console.error("❌ Membership update error:", error.message);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
 
     } catch (error) {
         console.error("MongoDB connection failed:", error);
